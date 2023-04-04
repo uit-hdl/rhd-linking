@@ -64,8 +64,8 @@ def load_data(pkl_path, region_code=None, reset_index=False):
 region_code=None 
 path_1875='data/sources/_1875.pkl'
 path_1900='data/sources/_1900.pkl'
-_1875_org = load_data(path_1875, region_code, reset_index=True) 
-_1900_org = load_data(path_1900, region_code, reset_index=True) 
+_1875_org = load_data(path_1875, region_code, reset_index=True) ## fixed
+_1900_org = load_data(path_1900, region_code, reset_index=True) ## fixed
 
 
 ########################
@@ -313,8 +313,8 @@ def preprocess(df, variables):
     return df
 #%%
 start = time.time()
-_1875 = preprocess(_1875, variables)
-_1900 = preprocess(_1900, variables)
+_1875 = preprocess(_1875_org, variables)
+_1900 = preprocess(_1900_org, variables)
 end = time.time()
 print(f"preprocessed time: {end-start:.5f} sec")
 #%%
@@ -425,17 +425,26 @@ def get_candidates_ray(df1, df2, mid_match=False):
     return cand
 
 #%%
-start = time.time()
-candidates_all = get_candidates_ray(_1875, _1900_20, mid_match=False) 
-print(f'{time.time() - start:.5} seconds')
+for direction in ('7500','0075'):
+    print(f"direction = {direction}")
+    if direction=='7500':
+        start = time.time()
+        candidates_all = get_candidates_ray(_1875, _1900_20, mid_match=False) 
+        print(f'{time.time() - start:.5} seconds')
+    elif direction=='0075': 
+        start = time.time()
+        candidates_all = get_candidates_ray(_1900_20, _1875, mid_match=False) 
+        print(f'{time.time() - start:.5} seconds')
+    
+    all_cand_list = np.array_split(candidates_all,20) ## fixed
+    
+    for i in range(len(all_cand_list)):
+        all_cand_list[i].to_pickle(f"data/tempresults/{direction}/norge_candidates_all_N{i}.pkl") 
 
 #%%
-start = time.time()
-candidates_all = get_candidates_ray(_1900_20, _1875, mid_match=False) 
-print(f'{time.time() - start:.5} seconds')
+## run before rerunning ray
+# ray.shutdown() 
 #%%
-
-
 
 ##############################
 ## Pair comparison
@@ -510,21 +519,19 @@ def get_comparison_vectors_ray(candidates, df1, df2):
     pbar.close()
     ray.shutdown()
     return results_list
-#%%
-all_cand_list = np.array_split(candidates,20) 
-#%%
-for i in range(len(all_cand_list)):
-    all_cand_list[i].to_pickle(f"data/tempresults/75_00/75_00_norge_candidates_all_N{i}.pkl") 
-#%%
-def get_comparison_vector_df_ray(df1,df2,features,i):
-    with open(f"data/tempresults/75_00/75_00_norge_candidates_all_N{i}.pkl", "rb") as fh:
+
+def get_comparison_vector_df_ray(df1,df2,features,i,way):
+    
+    with open(f"data/tempresults/{way}/norge_candidates_all_N{i}.pkl", "rb") as fh:
         cand = pickle.load(fh)
         start = time.time()
         res_df = pd.DataFrame(list(itertools.chain.from_iterable(get_comparison_vectors_ray(cand, df1, df2))), columns=features).sort_values(by=['idx_x','idx_y']).reset_index(drop=True)
         res_df['idx_xy'] = list(zip(res_df.idx_x, res_df.idx_y))
         print(f'{time.time() - start:.5} seconds')
-        res_df.to_pickle(f"data/tempresults/00_75/compared_all_df_{i}.pkl") 
+        res_df.to_pickle(f"data/tempresults/{way}/compared_all_df_{i}.pkl") 
+
 #%%
+## create subsets consisting of variables used for linking
 _1875s = _1875.loc[:,['id_i', 'fornavn', 'fornavns', 'etternavn', 'etternavns',
        'famst_ipums', 'sivst', 'fsted_kode', 'faar', 'bosted',
        'kommnr', 'comm_fornavns', 'comm_etternavns', 'fornavns_first',
@@ -539,14 +546,22 @@ _1900s = _1900.loc[:,['id_i', 'fornavn', 'fornavns', 'etternavn', 'etternavns',
        'adj_fsted_kode', 'comm_fsted', 'family_info','adj_kommnr','famst_ipums_f2']]
 _1900_20s = _1900s[np.logical_and((_1900s.faar<1881), (_1900s.faar!=0))]
 #%%
-for i in range(20):
-    get_comparison_vector_df_ray(_1875s,_1900_20s,used_columns,i)
+used_columns = ['idx_x','idx_y','firstN_JW','firstNs_JW','lastN_JW','lastNs_JW','birthY_diff','birthP_diff','adj_birthP_diff', 
+                'firstN_comm','lastN_comm','birthP_comm', 
+                'midNfirstN_jw', 'firstNmidN_jw', 'firstfNfirstN_jw', 'firstNfirstfN_jw',
+                'firstmNIfirstNI_diff', 'firstNIfirstmNI_diff','firstNI_diff', 'lastNI_diff',
+                'municp_diff','adj_municp_diff','residence_diff','comm_family_num', 'marital_diff', 'fm_relation_diff',
+                'marital_illogic', 'fm_relation_illogic'] 
 #%%
-for i in range(20):
-    get_comparison_vector_df_ray(_1900_20s,_1875s,used_columns,i)
+for direction in ('7500','0075'):
+    print(f"direction = {direction}")
+    if direction=='7500':
+        for i in range(20):
+            get_comparison_vector_df_ray(_1875s,_1900_20s,used_columns,i, direction)
+    elif direction=='0075':
+        for i in range(20):
+            get_comparison_vector_df_ray(_1900_20s,_1875s,used_columns,i, direction)
 #%%
-
-
 
 ##############################
 ## training ML models
@@ -556,14 +571,14 @@ for i in range(20):
 #%%
 def get_potential_pairs_from_big_compared(df,region_code):
     if df.ts[0]=='1875':
-        direction='75_00'
+        direction='7500'
         if region_code.startswith('19'):
             path = f"data/tempresults/{direction}/compared_all_df_19.pkl"
         elif region_code.startswith('04'):
             path = f"data/tempresults/{direction}/compared_all_df_4.pkl"
 
     elif df.ts[0]=='1900':
-        direction='00_75'
+        direction='0075'
         if region_code.startswith('19'):
             path = f"data/tempresults/{direction}/compared_all_df_19.pkl"
         elif region_code.startswith('04'):
@@ -591,70 +606,18 @@ def get_potential_pairs_from_big_compared(df,region_code):
     potential_pairs_tmp.to_pickle(f"data/tempresults/{direction}/{region_code}_potential_pairs.pkl")
     print(f"data/tempresults/{direction}/{region_code}_potential_pairs.pkl",'Done!')
 
-#%%
-gt_regions = ['0432','1922','1924','1931','1936','1938','1941','1943','1933'] #
-#%%
-for i,v in enumerate(gt_regions):
-    print(v)
-    get_potential_pairs_from_big_compared(_1875,v)
-    #get_potential_pairs_from_big_compared(_1900_20,v)
-
-#%% 75-00
-with open(f"data/tempresults/75_00/0432_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_432 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1931_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1931 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1936_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1936 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1941_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1941 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1943_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1943 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1922_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1922 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1924_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1924 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1933_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1933 = pickle.load(fh)
-with open(f"data/tempresults/75_00/1938_potential_pairs.pkl", "rb") as fh:
-    potential_pairs_1938 = pickle.load(fh)
-#%% 00-75 
-# with open(f"data/tempresults/00_75/0432_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_432 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1931_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1931 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1936_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1936 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1941_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1941 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1943_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1943 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1922_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1922 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1924_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1924 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1933_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1933 = pickle.load(fh)
-# with open(f"data/tempresults/00_75//1938_potential_pairs.pkl", "rb") as fh:
-#     potential_pairs_1938 = pickle.load(fh)
-#%%
-potential_pairs_gt = pd.concat([potential_pairs_432,
-                            potential_pairs_1922,potential_pairs_1924,potential_pairs_1931,potential_pairs_1933,
-                            potential_pairs_1936,potential_pairs_1938,potential_pairs_1941,potential_pairs_1943])
-#%%
-
-## split training set and test set
-potential_pairs_gt_train, potential_pairs_gt_test = train_test_split(potential_pairs_gt, test_size=0.1, random_state=0)
 
 #%%
-def get_idi_matches_idx(all_idi_matches, region_code):
+def get_idi_matches_idx(all_idi_matches, region_code, way):
     # 75-00 
-    res = all_idi_matches[all_idi_matches.adj_kommnr_x.str.startswith(region_code)] 
-    res['idx_xy'] = list(zip(res.idx_x, res.idx_y))
+    if way=='7500':
+        res = all_idi_matches[all_idi_matches.adj_kommnr_x.str.startswith(region_code)] 
+        res['idx_xy'] = list(zip(res.idx_x, res.idx_y))
     # 00-75 
-    # res = all_idi_matches[all_idi_matches.adj_kommnr_y.str.startswith(region_code)] 
-    # res['idx_xy'] = list(zip(res.idx_y, res.idx_x))
-    
+    elif way=='0075':
+        res = all_idi_matches[all_idi_matches.adj_kommnr_y.str.startswith(region_code)] 
+        res['idx_xy'] = list(zip(res.idx_y, res.idx_x))
+        
     true_pairs = res[['id_i','idx_xy']]
      
     dup_idi = pd.DataFrame(res.id_i.value_counts())
@@ -663,21 +626,8 @@ def get_idi_matches_idx(all_idi_matches, region_code):
     
     print(f'{region_code}\nidi_matches:{res.shape[0]}\nduplicated idi:{dup_idi.shape[0]}\nrecords with duplicated idi:{dup_idi_records.shape[0]}\n')
     return true_pairs 
-#%%
-idi_matches_all = pd.merge(_1875, _1900, how='inner', on=['id_i'])
-#%%
-idi_matches_432 = get_idi_matches_idx(idi_matches_all,'0432') 
-idi_matches_1922 = get_idi_matches_idx(idi_matches_all,'1922')
-idi_matches_1924 = get_idi_matches_idx(idi_matches_all,'1924')
-idi_matches_1931 = get_idi_matches_idx(idi_matches_all,'1931')
-idi_matches_1933 = get_idi_matches_idx(idi_matches_all,'1933')
-idi_matches_1936 = get_idi_matches_idx(idi_matches_all,'1936')
-idi_matches_1938 = get_idi_matches_idx(idi_matches_all,'1938')
-idi_matches_1941 = get_idi_matches_idx(idi_matches_all,'1941')
-idi_matches_1943 = get_idi_matches_idx(idi_matches_all,'1943')
-idi_matches_gt = pd.concat([idi_matches_432,idi_matches_1922,idi_matches_1924,idi_matches_1931,idi_matches_1933,idi_matches_1936,idi_matches_1938,idi_matches_1941,idi_matches_1943])
-#%%
 
+#%%
 ## cross validation 
 #%%
 extended_var = ['firstN_JW','firstNs_JW','lastN_JW','lastNs_JW','birthY_diff','birthP_diff','adj_birthP_diff',
@@ -713,39 +663,7 @@ def cross_val_test(potential_pairs, true_pairs, variables, test_size=0.1):
     
     return (xgb_clf, scores)
 
-#%%x
-lg_clf_gt_default, scores_lg_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
-#%%
-lg_clf_gt_default_l, scores_lg_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
-#%%
-rf_clf_gt_default, scores_rf_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
-#%%
-rf_clf_gt_default_l, scores_rf_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
-#%%
-xgb_clf_gt_default, scores_xgb_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
-#%%
-xgb_clf_gt_default_l, scores_xgb_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
-#%%
-svm_clf_gt_default, scores_svm_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
-#%%
-svm_clf_gt_default_l, scores_svm_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
-#%%
-print(f"precision_mean\t{scores_lg_default['test_precision'].mean():.2f}\tprecision_std\t{scores_lg_default['test_precision'].std():.2f}")
-print(f"recall_mean\t{scores_lg_default['test_recall'].mean():.2f}\trecall_std\t{scores_lg_default['test_recall'].std():.2f}")
-print(f"f1score_mean\t{scores_lg_default['test_f1'].mean():.2f}\tf1score_std\t{scores_lg_default['test_f1'].std():.2f}")
-#%%
-print(f"precision_mean\t{scores_rf_default['test_precision'].mean():.2f}\tprecision_std\t{scores_rf_default['test_precision'].std():.2f}")
-print(f"recall_mean\t{scores_rf_default['test_recall'].mean():.2f}\trecall_std\t{scores_rf_default['test_recall'].std():.2f}")
-print(f"f1score_mean\t{scores_rf_default['test_f1'].mean():.2f}\tf1score_std\t{scores_rf_default['test_f1'].std():.2f}")
-#%%
-print(f"precision_mean\t{scores_xgb_default['test_precision'].mean():.2f}\tprecision_std\t{scores_xgb_default['test_precision'].std():.2f}")
-print(f"recall_mean\t{scores_xgb_default['test_recall'].mean():.2f}\trecall_std\t{scores_xgb_default['test_recall'].std():.2f}")
-print(f"f1score_mean\t{scores_xgb_default['test_f1'].mean():.2f}\tf1score_std\t{scores_xgb_default['test_f1'].std():.2f}")
-#%%
-print(f"precision_mean\t{scores_svm_default['test_precision'].mean():.2f}\tprecision_std\t{scores_svm_default['test_precision'].std():.2f}")
-print(f"recall_mean\t{scores_svm_default['test_recall'].mean():.2f}\trecall_std\t{scores_svm_default['test_recall'].std():.2f}")
-print(f"f1score_mean\t{scores_svm_default['test_f1'].mean():.2f}\tf1score_std\t{scores_svm_default['test_f1'].std():.2f}")
-#%%
+
 
 ## train models 
 #%%
@@ -789,14 +707,6 @@ def train_classifiers(X_train, X_test, y_train, y_test):
     return (lg_clf, svm_clf, rf_clf, xgb_clf)
 
 #%%
-# Time-invariant
-xlg_clf_gtl, xsvm_clf_gtl, xrf_clf_gtl, xgb_clf_gtl = train_model(potential_pairs_gt,idi_matches_gt,limited_var) 
-#%%
-
-# Extended
-xlg_clf_gt, xsvm_clf_gt, xrf_clf_gt, xgb_clf_gt = train_model(potential_pairs_gt,idi_matches_gt,extended_var) 
-#%%
-
 ## feature importance
 ext_features = [
                 'JW distance between first names (original)',
@@ -857,15 +767,122 @@ def my_plot_importance(booster, figsize, features, **kwrgs):
     ax.set_yticklabels(features, fontsize=14)
     return plot_importance(importance, ax=ax, importance_type='gain', xlim=(0,400), 
                             xlabel='Average gain', ylabel=None, title=None,**kwrgs)
+
 #%%
-my_plot_importance(xgb_clf_gt, (7,8), ext_features)
+gt_regions = ['0432','1922','1924','1931','1936','1938','1941','1943','1933'] #
 #%%
-my_plot_importance(xgb_clf_gtl, (7,6), lim_features)
-#%%
-plot_importance(xgb_clf_gt.get_booster(),importance_type='gain', xlabel='Average gain')
-#%%
-plot_importance(xgb_clf_gtl.get_booster(),importance_type='gain', xlabel='Average gain')
-#%%
+for ts in range(2):
+    if ts==0:
+        for i,v in enumerate(gt_regions):
+            print(v)
+            get_potential_pairs_from_big_compared(_1875,v)
+    elif ts==1:
+        for i,v in enumerate(gt_regions):
+            print(v)
+            get_potential_pairs_from_big_compared(_1900_20,v)
+#%% 
+for direction in ("7500","0075"):
+    print(f"direction = {direction}")
+    with open(f"data/tempresults/{direction}/0432_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_432 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1931_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1931 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1936_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1936 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1941_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1941 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1943_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1943 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1922_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1922 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1924_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1924 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1933_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1933 = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/1938_potential_pairs.pkl", "rb") as fh:
+        potential_pairs_1938 = pickle.load(fh)
+    #%%
+    potential_pairs_gt = pd.concat([potential_pairs_432,
+                                potential_pairs_1922,potential_pairs_1924,potential_pairs_1931,potential_pairs_1933,
+                                potential_pairs_1936,potential_pairs_1938,potential_pairs_1941,potential_pairs_1943])
+
+    potential_pairs_gt.to_pickle(f"data/tempresults/{direction}/potential_pairs_gt.pkl")
+    #%%
+    ## split training set and test set
+    potential_pairs_gt_train, potential_pairs_gt_test = train_test_split(potential_pairs_gt, test_size=0.1, random_state=0)
+
+    #%%
+    idi_matches_all = pd.merge(_1875, _1900, how='inner', on=['id_i'])
+    #%%
+    idi_matches_432 = get_idi_matches_idx(idi_matches_all,'0432', direction) 
+    idi_matches_1922 = get_idi_matches_idx(idi_matches_all,'1922', direction)
+    idi_matches_1924 = get_idi_matches_idx(idi_matches_all,'1924', direction)
+    idi_matches_1931 = get_idi_matches_idx(idi_matches_all,'1931', direction)
+    idi_matches_1933 = get_idi_matches_idx(idi_matches_all,'1933', direction)
+    idi_matches_1936 = get_idi_matches_idx(idi_matches_all,'1936', direction)
+    idi_matches_1938 = get_idi_matches_idx(idi_matches_all,'1938', direction)
+    idi_matches_1941 = get_idi_matches_idx(idi_matches_all,'1941', direction)
+    idi_matches_1943 = get_idi_matches_idx(idi_matches_all,'1943', direction)
+    idi_matches_gt = pd.concat([idi_matches_432,idi_matches_1922,idi_matches_1924,idi_matches_1931,idi_matches_1933,idi_matches_1936,idi_matches_1938,idi_matches_1941,idi_matches_1943])
+
+    #%%x
+    lg_clf_gt_default, scores_lg_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
+    #%%
+    lg_clf_gt_default_l, scores_lg_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
+    #%%
+    rf_clf_gt_default, scores_rf_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
+    #%%
+    rf_clf_gt_default_l, scores_rf_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
+    #%%
+    xgb_clf_gt_default, scores_xgb_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
+    #%%
+    xgb_clf_gt_default_l, scores_xgb_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
+    #%%
+    svm_clf_gt_default, scores_svm_default = cross_val_test(potential_pairs_gt_train,idi_matches_gt,extended_var)
+    #%%
+    svm_clf_gt_default_l, scores_svm_default_l = cross_val_test(potential_pairs_gt_train,idi_matches_gt,limited_var)
+    #%%
+    print(f"precision_mean\t{scores_lg_default['test_precision'].mean():.2f}\tprecision_std\t{scores_lg_default['test_precision'].std():.2f}")
+    print(f"recall_mean\t{scores_lg_default['test_recall'].mean():.2f}\trecall_std\t{scores_lg_default['test_recall'].std():.2f}")
+    print(f"f1score_mean\t{scores_lg_default['test_f1'].mean():.2f}\tf1score_std\t{scores_lg_default['test_f1'].std():.2f}")
+    #%%
+    print(f"precision_mean\t{scores_rf_default['test_precision'].mean():.2f}\tprecision_std\t{scores_rf_default['test_precision'].std():.2f}")
+    print(f"recall_mean\t{scores_rf_default['test_recall'].mean():.2f}\trecall_std\t{scores_rf_default['test_recall'].std():.2f}")
+    print(f"f1score_mean\t{scores_rf_default['test_f1'].mean():.2f}\tf1score_std\t{scores_rf_default['test_f1'].std():.2f}")
+    #%%
+    print(f"precision_mean\t{scores_xgb_default['test_precision'].mean():.2f}\tprecision_std\t{scores_xgb_default['test_precision'].std():.2f}")
+    print(f"recall_mean\t{scores_xgb_default['test_recall'].mean():.2f}\trecall_std\t{scores_xgb_default['test_recall'].std():.2f}")
+    print(f"f1score_mean\t{scores_xgb_default['test_f1'].mean():.2f}\tf1score_std\t{scores_xgb_default['test_f1'].std():.2f}")
+    #%%
+    print(f"precision_mean\t{scores_svm_default['test_precision'].mean():.2f}\tprecision_std\t{scores_svm_default['test_precision'].std():.2f}")
+    print(f"recall_mean\t{scores_svm_default['test_recall'].mean():.2f}\trecall_std\t{scores_svm_default['test_recall'].std():.2f}")
+    print(f"f1score_mean\t{scores_svm_default['test_f1'].mean():.2f}\tf1score_std\t{scores_svm_default['test_f1'].std():.2f}")
+    #%%
+    # Time-invariant
+    xlg_clf_gtl, xsvm_clf_gtl, xrf_clf_gtl, xgb_clf_gtl = train_model(potential_pairs_gt,idi_matches_gt,limited_var) 
+    #%%
+    xlg_clf_gtl.to_pickle(f"data/tempresults/{direction}/xlg_clf_gtl.pkl")
+    xsvm_clf_gtl.to_pickle(f"data/tempresults/{direction}/xsvm_clf_gtl.pkl")
+    xrf_clf_gtl.to_pickle(f"data/tempresults/{direction}/xrf_clf_gtl.pkl")
+    xgb_clf_gtl.to_pickle(f"data/tempresults/{direction}/xgb_clf_gtl.pkl")
+
+    #%%
+    # Extended
+    xlg_clf_gt, xsvm_clf_gt, xrf_clf_gt, xgb_clf_gt = train_model(potential_pairs_gt,idi_matches_gt,extended_var) 
+    #%%
+    xlg_clf_gt.to_pickle(f"data/tempresults/{direction}/xlg_clf_gt.pkl")
+    xsvm_clf_gt.to_pickle(f"data/tempresults/{direction}/xsvm_clf_gt.pkl")
+    xrf_clf_gt.to_pickle(f"data/tempresults/{direction}/xrf_clf_gt.pkl")
+    xgb_clf_gt.to_pickle(f"data/tempresults/{direction}/xgb_clf_gt.pkl")
+    #%%
+    my_plot_importance(xgb_clf_gt, (7,8), ext_features)
+    #%%
+    my_plot_importance(xgb_clf_gtl, (7,6), lim_features)
+    #%%
+    plot_importance(xgb_clf_gt.get_booster(),importance_type='gain', xlabel='Average gain')
+    #%%
+    plot_importance(xgb_clf_gtl.get_booster(),importance_type='gain', xlabel='Average gain')
+
 
 
 ##############################
@@ -880,11 +897,10 @@ def real_predict(potential_pairs, classifier, variables):
     print(f"predicted: {y_pred.sum()}")
     return y_pred, y_prob
 
-def get_predicted_matches(classifier,variables):
+def get_predicted_matches(classifier,variables, way):
     matched_idx_list=[]
     for i in range(20):
-        with open(f"data/tempresults/75_00/compared_all_df_{i}.pkl", "rb") as fh:
-        # with open(f"data/tempresults/00_75/compared_all_df_{i}.pkl", "rb") as fh:
+        with open(f"data/tempresults/{way}/compared_all_df_{i}.pkl", "rb") as fh:
             cand = pickle.load(fh)
             print(f"df {i} shape: {cand.shape}")
             start = time.time()
@@ -1082,7 +1098,7 @@ def ABEJW(df, jw_diff, birthP_diff, birthY_diff):
 def get_all_ABEJW(jw_diff=0.15, birthP_diff=0, birthY_diff=1):
     results = []
     for i in range(20):
-        with open(f"data/tempresults/75_00/compared_all_df_{i}.pkl", "rb") as fh: ## 75-00
+        with open(f"data/tempresults/7500/compared_all_df_{i}.pkl", "rb") as fh: ## 75-00
             df = pickle.load(fh)
             print(i, df.shape)
             abe_df = ABEJW(df, jw_diff, birthP_diff, birthY_diff)
@@ -1094,21 +1110,31 @@ def get_all_ABEJW(jw_diff=0.15, birthP_diff=0, birthY_diff=1):
 
 ## check with match selection parameters
 #%%
-sc = StandardScaler() 
-gtX = potential_pairs_gt.loc[:,limited_var].values
-gtX = sc.fit_transform(gtX)
-predicted_gt_train_lim = get_predicted_matches_comp_vectors(potential_pairs_gt_train,xgb_clf_gtl,limited_var)
+for direction in ("7500","0075"):
+    with open(f"data/tempresults/{direction}/potential_pairs_gt.pkl", "rb") as fh:
+        potential_pairs_gt = pickle.load(fh)
+        potential_pairs_gt_train, potential_pairs_gt_test = train_test_split(potential_pairs_gt, test_size=0.1, random_state=0)
+    with open(f"data/tempresults/{direction}/xlg_clf_gtl.pkl", "rb") as fh:
+        xgb_clf_gtl = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/xlg_clf_gt.pkl", "rb") as fh:
+        xgb_clf_gt = pickle.load(fh)        
 
-#%%
-sc = StandardScaler() 
-gtX = potential_pairs_gt.loc[:,extended_var].values 
-gtX = sc.fit_transform(gtX)
-predicted_gt_train_ext = get_predicted_matches_comp_vectors(potential_pairs_gt_train, xgb_clf_gt, extended_var)
+    for var_scope in ('lim','ext'):
+        if var_scope=='lim':
+            sc = StandardScaler() 
+            gtX = potential_pairs_gt.loc[:,limited_var].values
+            gtX = sc.fit_transform(gtX)
+            predicted_gt_train_lim = get_predicted_matches_comp_vectors(potential_pairs_gt_train,xgb_clf_gtl,limited_var)
+            for i in np.arange(0.1,0.95,0.1): 
+                check_prob_dup_gap_cutoff(predicted_gt_train_lim, direction, i) 
+        elif var_scope=='ext':
+            sc = StandardScaler() 
+            gtX = potential_pairs_gt.loc[:,extended_var].values 
+            gtX = sc.fit_transform(gtX)
+            predicted_gt_train_ext = get_predicted_matches_comp_vectors(potential_pairs_gt_train, xgb_clf_gt, extended_var)
+            for i in np.arange(0.1,0.95,0.1): 
+                check_prob_dup_gap_cutoff(predicted_gt_train_ext, direction, i)
 
-#%%
-for i in np.arange(0.1,0.95,0.1): 
-    check_prob_dup_gap_cutoff(predicted_gt_train_ext, '7500', i) 
-    # check_prob_dup_gap_cutoff(predicted_gt_train_lim, '7500', i) 
 #%%
 
 ## Rule based model parameter selection
@@ -1127,47 +1153,49 @@ for i in np.arange(0.05, 0.22, 0.05):
 # Linking nationwide
 ##############################
 #%%
-## Time-invariant
-sc = StandardScaler() 
-gtX = potential_pairs_gt.loc[:,limited_var].values
-gtX = sc.fit_transform(gtX) 
-testall_lim = get_predicted_matches(xgb_clf_gtl, limited_var) 
 #%%
-matched_idx_xgb_lim_7500 = pd.concat(testall_lim)
-# matched_idx_xgb_lim_0075 = pd.concat(testall_lim)
-matched_idx_xgb_lim_7500.shape 
-#%%
-# Time invariant, Unique+Best
-matched_7500_lim = check_prob_dup_gap_cutoff(matched_idx_xgb_lim_7500, '7500', 0.1, 1) 
-matched_0075_lim = check_prob_dup_gap_cutoff(matched_idx_xgb_lim_0075, '0075', 0.1, 1) 
-#%%
-# Time invariant, Unique
-matched_7500_lim_03 = check_prob_dup_gap_cutoff(matched_idx_xgb_lim_7500, '7500', 0.3, 100) 
-matched_0075_lim_03 = check_prob_dup_gap_cutoff(matched_idx_xgb_lim_0075, '0075', 0.3, 100) 
-#%%
+for direction in ("7500","0075"):
+    with open(f"data/tempresults/{direction}/potential_pairs_gt.pkl", "rb") as fh:
+        potential_pairs_gt = pickle.load(fh)
+        potential_pairs_gt_train, potential_pairs_gt_test = train_test_split(potential_pairs_gt, test_size=0.1, random_state=0)
+    with open(f"data/tempresults/{direction}/xlg_clf_gtl.pkl", "rb") as fh:
+        xgb_clf_gtl = pickle.load(fh)
+    with open(f"data/tempresults/{direction}/xlg_clf_gt.pkl", "rb") as fh:
+        xgb_clf_gt = pickle.load(fh)        
 
-## Extended
-sc = StandardScaler() 
-gtX = potential_pairs_gt.loc[:,extended_var].values
-gtX = sc.fit_transform(gtX) 
-testall_ext = get_predicted_matches(xgb_clf_gt, extended_var) 
-#%%
-matched_idx_xgb_ext_7500 = pd.concat(testall_ext)
-# matched_idx_xgb_ext_0075 = pd.concat(testall_ext)
-#%%
-# Extended, Unique+Best
-matched_7500_ext = check_prob_dup_gap_cutoff(matched_idx_xgb_ext_7500, '7500', 0.1, 1) 
-matched_0075_ext = check_prob_dup_gap_cutoff(matched_idx_xgb_ext_0075, '0075', 0.1, 1) 
-#%%
-# Extended, Unique
-matched_7500_ext_04 = check_prob_dup_gap_cutoff(matched_idx_xgb_ext_7500, '7500', 0.4, 100) 
-matched_0075_ext_04 = check_prob_dup_gap_cutoff(matched_idx_xgb_ext_0075, '0075', 0.4, 100) 
-#%%
+    for var_scope in ('lim','ext'):
+        if var_scope=='lim':
+            sc = StandardScaler() 
+            gtX = potential_pairs_gt.loc[:,limited_var].values
+            gtX = sc.fit_transform(gtX)
+            testall_lim = get_predicted_matches(xgb_clf_gtl, limited_var, direction) 
+            matched_idx_xgb_lim = pd.concat(testall_lim)
+            print(matched_idx_xgb_lim.shape)
+            # Time invariant, Unique+Best
+            matched_lim = check_prob_dup_gap_cutoff(matched_idx_xgb_lim, direction, 0.1, 1)
+            matched_lim.to_pickle(f"data/tempresults/{direction}/matched_lim.pkl")
+            # Time invariant, Unique
+            matched_lim_03 = check_prob_dup_gap_cutoff(matched_idx_xgb_lim, direction, 0.3, 100)
+            matched_lim_03.to_pickle(f"data/tempresults/{direction}/matched_lim_03.pkl") 
+        elif var_scope=='ext':
+            sc = StandardScaler() 
+            gtX = potential_pairs_gt.loc[:,extended_var].values 
+            gtX = sc.fit_transform(gtX)
+            testall_ext = get_predicted_matches(xgb_clf_gt, extended_var, direction)
+            matched_idx_xgb_ext = pd.concat(testall_ext)
+            # Extended, Unique+Best
+            matched_ext = check_prob_dup_gap_cutoff(matched_idx_xgb_ext, direction, 0.1, 1) 
+            matched_ext.to_pickle(f"data/tempresults/{direction}/matched_ext.pkl")
+            # Extended, Unique
+            matched_ext_04 = check_prob_dup_gap_cutoff(matched_idx_xgb_ext, direction, 0.4, 100)
+            matched_ext_04.to_pickle(f"data/tempresults/{direction}/matched_ext_04.pkl") 
+
 
 ## Rule-based
 all_ABEJW = get_all_ABEJW(0.15,0,1)
-matched_7500_ABEJW = get_ABEJW_unique_matched_from_comp_vectors(all_ABEJW, '7500')
-matched_7500_ABEJW.shape # same as 00-75
+matched_ABEJW = get_ABEJW_unique_matched_from_comp_vectors(all_ABEJW, '7500') # same as 00-75
+print(matched_ABEJW.shape)
+matched_ABEJW.to_pickle("data/tempresults/norge_matched_ABEJW_jw015p0y1.pkl")
 #%%
 
 
@@ -1179,25 +1207,44 @@ matched_7500_ABEJW.shape # same as 00-75
 # Two-way check
 #################################
 #%%
+with open(f"data/tempresults/7500/matched_lim.pkl", "rb") as fh:
+        matched_7500_lim = pickle.load(fh)
+with open(f"data/tempresults/7500/matched_lim_03.pkl", "rb") as fh:
+        matched_7500_lim_03 = pickle.load(fh)
+with open(f"data/tempresults/7500/matched_ext.pkl", "rb") as fh:
+        matched_7500_ext = pickle.load(fh)
+with open(f"data/tempresults/7500/matched_ext_04.pkl", "rb") as fh:
+        matched_7500_ext_04 = pickle.load(fh)
+with open(f"data/tempresults/0075/matched_lim.pkl", "rb") as fh:
+        matched_0075_lim = pickle.load(fh)
+with open(f"data/tempresults/0075/matched_lim_03.pkl", "rb") as fh:
+        matched_0075_lim_03 = pickle.load(fh)
+with open(f"data/tempresults/0075/matched_ext.pkl", "rb") as fh:
+        matched_0075_ext = pickle.load(fh)
+with open(f"data/tempresults/0075/matched_ext_04.pkl", "rb") as fh:
+        matched_0075_ext_04 = pickle.load(fh)
+with open(f"data/tempresults/norge_matched_ABEJW_jw015p0y1.pkl", "rb") as fh:
+        matched_ABEJW = pickle.load(fh)
+
 #%%
-matched_7500_lim['idxy_75_00'] = list(zip(matched_7500_lim.idx_x, matched_7500_lim.idx_y)) 
-matched_0075_lim['idxy_75_00'] = list(zip(matched_0075_lim.idx_y, matched_0075_lim.idx_x)) 
-matched_both_lim = matched_7500_lim[matched_7500_lim.idxy_75_00.isin(matched_0075_lim.idxy_75_00)]
+matched_7500_lim['idxy_7500'] = list(zip(matched_7500_lim.idx_x, matched_7500_lim.idx_y)) 
+matched_0075_lim['idxy_7500'] = list(zip(matched_0075_lim.idx_y, matched_0075_lim.idx_x)) 
+matched_both_lim = matched_7500_lim[matched_7500_lim.idxy_7500.isin(matched_0075_lim.idxy_7500)]
 matched_both_lim.shape
 #%%
-matched_7500_lim_03['idxy_75_00'] = list(zip(matched_7500_lim_03.idx_x, matched_7500_lim_03.idx_y)) 
-matched_0075_lim_03['idxy_75_00'] = list(zip(matched_0075_lim_03.idx_y, matched_0075_lim_03.idx_x)) 
-matched_both_lim_03 = matched_7500_lim_03[matched_7500_lim_03.idxy_75_00.isin(matched_0075_lim_03.idxy_75_00)]
+matched_7500_lim_03['idxy_7500'] = list(zip(matched_7500_lim_03.idx_x, matched_7500_lim_03.idx_y)) 
+matched_0075_lim_03['idxy_7500'] = list(zip(matched_0075_lim_03.idx_y, matched_0075_lim_03.idx_x)) 
+matched_both_lim_03 = matched_7500_lim_03[matched_7500_lim_03.idxy_7500.isin(matched_0075_lim_03.idxy_7500)]
 matched_both_lim_03.shape
 #%%
-matched_7500_ext['idxy_75_00'] = list(zip(matched_7500_ext.idx_x, matched_7500_ext.idx_y)) 
-matched_0075_ext['idxy_75_00'] = list(zip(matched_0075_ext.idx_y, matched_0075_ext.idx_x)) 
-matched_both_ext = matched_7500_ext[matched_7500_ext.idxy_75_00.isin(matched_0075_ext.idxy_75_00)]
+matched_7500_ext['idxy_7500'] = list(zip(matched_7500_ext.idx_x, matched_7500_ext.idx_y)) 
+matched_0075_ext['idxy_7500'] = list(zip(matched_0075_ext.idx_y, matched_0075_ext.idx_x)) 
+matched_both_ext = matched_7500_ext[matched_7500_ext.idxy_7500.isin(matched_0075_ext.idxy_7500)]
 matched_both_ext.shape
 #%%
-matched_7500_ext_04['idxy_75_00'] = list(zip(matched_7500_ext_04.idx_x, matched_7500_ext_04.idx_y)) 
-matched_0075_ext_04['idxy_75_00'] = list(zip(matched_0075_ext_04.idx_y, matched_0075_ext_04.idx_x)) 
-matched_both_ext_04 = matched_7500_ext_04[matched_7500_ext_04.idxy_75_00.isin(matched_0075_ext_04.idxy_75_00)]
+matched_7500_ext_04['idxy_7500'] = list(zip(matched_7500_ext_04.idx_x, matched_7500_ext_04.idx_y)) 
+matched_0075_ext_04['idxy_7500'] = list(zip(matched_0075_ext_04.idx_y, matched_0075_ext_04.idx_x)) 
+matched_both_ext_04 = matched_7500_ext_04[matched_7500_ext_04.idxy_7500.isin(matched_0075_ext_04.idxy_7500)]
 matched_both_ext_04.shape
 
 #%%
@@ -1205,26 +1252,35 @@ matched_both_lim.to_pickle("data/tempresults/norge_matched_both_lim.pkl")
 matched_both_lim_03.to_pickle("data/tempresults/norge_matched_both_lim_03.pkl")
 matched_both_ext.to_pickle("data/tempresults/norge_matched_both_ext.pkl")
 matched_both_ext_04.to_pickle("data/tempresults/norge_matched_both_ext_04.pkl")
-matched_7500_ABEJW.to_pickle("data/tempresults/75_00/norge_75_00_matched_ABEJW_jw015p0y1.pkl.pkl")
+#%%
+## to load saved results
+with open(f"data/tempresults/norge_matched_both_lim.pkl", "rb") as fh:
+        matched_both_lim = pickle.load(fh)
+with open(f"data/tempresults/norge_matched_both_lim_03", "rb") as fh:
+        matched_both_lim_03 = pickle.load(fh)
+with open(f"data/tempresults/norge_matched_both_ext.pkl", "rb") as fh:
+        matched_both_ext = pickle.load(fh)
+with open(f"data/tempresults/norge_matched_both_ext_04.pkl", "rb") as fh:
+        matched_both_ext_04 = pickle.load(fh)
+with open(f"data/tempresults/norge_matched_ABEJW_jw015p0y1.pkl", "rb") as fh:
+        matched_ABEJW = pickle.load(fh)
+        
 #%%
 
 # relationships
 #%%
 set1 = set(matched_both_lim_03.idx_xy)
 set2 = set(matched_both_ext_04.idx_xy)
-set3 = set(matched_7500_ABEJW.idx_xy)
+set3 = set(matched_ABEJW.idx_xy)
 
 venn3([set1, set2, set3], ('Time invariant (Unique)', 'Extended (Unique)', 'Rule-based (ABE-JW)'))
 plt.show()
 #%%
-set4 = set(matched_both_lim.idxy_75_00)
-set5 = set(matched_both_ext.idxy_75_00)
+set4 = set(matched_both_lim.idxy_7500)
+set5 = set(matched_both_ext.idxy_7500)
 
 venn2([set4, set5], ('Time invariant (Unique + Best)', 'Extended (Unique + Best)'))
 plt.show()
-
-
-
 
 
 
@@ -1234,7 +1290,10 @@ plt.show()
 # Evaluation
 ########################
 ########################
-
+with open(f"data/tempresults/7500/xlg_clf_gtl.pkl", "rb") as fh:
+    xgb_clf_gtl = pickle.load(fh)
+with open(f"data/tempresults/7500/xlg_clf_gt.pkl", "rb") as fh:
+    xgb_clf_gt = pickle.load(fh) 
 ########################
 # 1. testset split from training data
 ########################
@@ -1356,8 +1415,8 @@ def get_testset(df, testset):
     testset_df_idx = df[df.id_d.isin(testset.id_d1)].index # 75-00
     # testset_df_idx = df[df.id_d.isin(testset.id_d2)].index # 00-75
     for i in range(20):
-        with open(f"data/tempresults/75_00/compared_all_df_{i}.pkl", "rb") as fh: # 75-00
-        # with open(f"data/tempresults/00_75/compared_all_df_{i}.pkl", "rb") as fh: # 00-75
+        with open(f"data/tempresults/7500/compared_all_df_{i}.pkl", "rb") as fh: # 75-00
+        # with open(f"data/tempresults/0075/compared_all_df_{i}.pkl", "rb") as fh: # 00-75
             cand = pickle.load(fh)
             dataset.append(cand[cand.idx_x.isin(testset_df_idx)])
     return dataset
@@ -1572,7 +1631,7 @@ with open(f"data/tempresults/norge_matched_both_ext.pkl", "rb") as fh:
     ext = pickle.load(fh)
 with open(f"data/tempresults/norge_matched_both_ext_04.pkl", "rb") as fh:
     ext_04 = pickle.load(fh)
-with open(f"data/tempresults/75_00/norge_75_00_matched_ABEJW_jw015p0y1.pkl", "rb") as fh:
+with open(f"data/tempresults/7500/norge_7500_matched_ABEJW_jw015p0y1.pkl", "rb") as fh:
     abe = pickle.load(fh)
 #%%
 data = [_1900_20, _1900_25, lim, lim_03, ext, ext_04, abe]
