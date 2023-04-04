@@ -64,8 +64,8 @@ def load_data(pkl_path, region_code=None, reset_index=False):
 region_code=None 
 path_1875='data/sources/_1875.pkl'
 path_1900='data/sources/_1900.pkl'
-_1875_org = load_data(path_1875, region_code, reset_index=True) ## fixed
-_1900_org = load_data(path_1900, region_code, reset_index=True) ## fixed
+_1875_org = load_data(path_1875, region_code, reset_index=True) 
+_1900_org = load_data(path_1900, region_code, reset_index=True) 
 
 
 ########################
@@ -436,7 +436,7 @@ for direction in ('7500','0075'):
         candidates_all = get_candidates_ray(_1900_20, _1875, mid_match=False) 
         print(f'{time.time() - start:.5} seconds')
     
-    all_cand_list = np.array_split(candidates_all,20) ## fixed
+    all_cand_list = np.array_split(candidates_all,20) 
     
     for i in range(len(all_cand_list)):
         all_cand_list[i].to_pickle(f"data/tempresults/{direction}/norge_candidates_all_N{i}.pkl") 
